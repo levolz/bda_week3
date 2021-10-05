@@ -90,9 +90,6 @@ We're going to use tidytext to break up the text into separate tokens and count 
 
 ```{r}
 reviews = amazon %>% 
-
-   # sample_n(5000) %>% # start with smallish sample; for you final model use all data!
-
    # tokinize reviews at word level
    unnest_tokens(token, review) %>%
 
