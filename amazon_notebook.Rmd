@@ -97,7 +97,6 @@ reviews = amazon %>%
    # (keep id, name, and rating in the result)
    count(id, name, rating, token)
 
-head(reviews)
 ```
 
 ## Stopwords
@@ -173,6 +172,15 @@ While $TFIDF_{d,t}$ is extensively applied and very successful in document retri
 
 ```{r}
 ## Compute token features
+to_tf_idf = . %>% 
+    # Compute TF·IDF for each word per sentence 
+    bind_tf_idf(token, id, n) %>% 
+
+    # Words that are not present are NA's but should be 0
+    replace_na(list(tf=0, idf=Inf, tf_idf=0))
+
+
+reviewstf <- reviews %>% to_tf_idf() %>% print()
 
 ```
 
@@ -190,9 +198,8 @@ we can filter the rows in `features` for which $-\log(\text{df}_t / N) \leq -\lo
 
 
 ```{r}
-# Near-zero variance features
-
-
+reviews_relfreq <- reviewstf %>%
+  filter(idf <= -log(0.01/100))
 ```
 
 ## Correlated features
