@@ -40,7 +40,7 @@ Answer the 3 most important questions for any ML project:
 Locate and load the data into memory.
 
 ```{r}
-dir("../input", recursive=TRUE)
+if (KAGGLE_RUN) dir("../input", recursive=TRUE)
 ```
 
 ```{r}
@@ -81,7 +81,7 @@ Here is code for pasting `name` and `review` using the `unite()` function:
 amazon = amazon %>% 
     unite(review, name, review, sep = " — ", remove = FALSE)
 
-print(amazon)
+head(amazon)
 ```
 
 # 3.1 Tokenization
@@ -139,7 +139,7 @@ The only reason to mention stopwords here is because too often it prescribed as 
 
 # 4. Features engineering
 
-Features computed for tokens in text are based on the Bag of Words (BoW) model: Each document is considered a bag of words, in wich order plays no particular. A better name would be Bag of Tokens, because tokens can also be bi-grams etc, but we're stuck with BoW. Common features are
+Features computed for tokens in text are based on the Bag of Words (BoW) model: Each document is considered a bag of words, in which order plays no particular. A better name would be Bag of Tokens, because tokens can also be bi-grams etc., but we're stuck with BoW. Common features are
 
 
 - **document occurence**: 
