@@ -97,6 +97,7 @@ reviews = amazon %>%
    # (keep id, name, and rating in the result)
    count(id, name, rating, token)
 
+head(reviews)
 ```
 
 ## Stopwords
@@ -180,7 +181,9 @@ to_tf_idf = . %>%
     replace_na(list(tf=0, idf=Inf, tf_idf=0))
 
 
-reviewstf <- reviews %>% to_tf_idf() %>% print()
+reviewstf <-reviews %>% to_tf_idf() %>% print()
+
+
 
 ```
 
@@ -198,8 +201,14 @@ we can filter the rows in `features` for which $-\log(\text{df}_t / N) \leq -\lo
 
 
 ```{r}
+# Near-zero variance features
 reviews_relfreq <- reviewstf %>%
-  filter(idf <= -log(0.01/100))
+  filter(idf < -log(0.01/100))   
+reviews_relfreq
+
+
+
+
 ```
 
 ## Correlated features
@@ -249,6 +258,14 @@ As said, `glmnet()` allows you to tune the flexibility of the model by means of 
 
 
 # Features to design matrix
+#Make a matrix
+X = reviewstf  %>%
+    cast_sparse(id, token, tf_idf) %>% 
+    # Remove rows that do not belong to cases
+    .[!is.na(rownames(.)),]
+
+X[1:8,20:25]
+cat("rows, columns: ", dim(X))
 
 
 # Target variable
