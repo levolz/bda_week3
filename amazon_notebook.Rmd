@@ -40,7 +40,7 @@ Answer the 3 most important questions for any ML project:
 Locate and load the data into memory.
 
 ```{r}
-dir("../input", recursive=TRUE)
+if (KAGGLE_RUN) dir("../input", recursive=TRUE)
 ```
 
 ```{r}
@@ -81,7 +81,7 @@ Here is code for pasting `name` and `review` using the `unite()` function:
 amazon = amazon %>% 
     unite(review, name, review, sep = " — ", remove = FALSE)
 
-print(amazon)
+head(amazon)
 ```
 
 # 3.1 Tokenization
@@ -139,7 +139,7 @@ The only reason to mention stopwords here is because too often it prescribed as 
 
 # 4. Features engineering
 
-Features computed for tokens in text are based on the Bag of Words (BoW) model: Each document is considered a bag of words, in wich order plays no particular. A better name would be Bag of Tokens, because tokens can also be bi-grams etc, but we're stuck with BoW. Common features are
+Features computed for tokens in text are based on the Bag of Words (BoW) model: Each document is considered a bag of words, in which order plays no particular. A better name would be Bag of Tokens, because tokens can also be bi-grams etc., but we're stuck with BoW. Common features are
 
 
 - **document occurence**: 
@@ -172,6 +172,7 @@ While $TFIDF_{d,t}$ is extensively applied and very successful in document retri
 (Btw: While linear and logistic regression are scale insensitive because they can absorb scale differences in the regression coefficients, LDA and QDA are insenstive to scaling because the compute Mahalanobis distance and not Euclidean distance. The Mahalanobis distance is the Euclidean distance after standardizing in SVD space.)
 
 ```{r}
+library(quanteda)
 ## Compute token features
 to_tf_idf = . %>% 
     # Compute TF·IDF for each word per sentence 
@@ -181,7 +182,69 @@ to_tf_idf = . %>%
     replace_na(list(tf=0, idf=Inf, tf_idf=0))
 
 
+<<<<<<< HEAD
 reviewstf <- reviews %>% to_tf_idf() %>% print()
+=======
+reviewstf <-reviews %>% to_tf_idf() %>% print()
+
+#Calculate number of words
+amazon$n_words<-
+  ntoken(x =amazon$review, 
+         remove_punct = TRUE)
+
+#Calculate number of sentences
+amazon$n_sentences <-
+nsentence(x=amazon$review)
+
+#Calculate maximum and minimum words per sentence. 
+amazon_tokenized_sent <-
+    amazon %>%
+    unnest_tokens(sentence, review, token = 'sentences')
+
+amazon_tokenized_sent$n_words_sent <-
+  ntoken(x = amazon_tokenized_sent$sentence,
+         remove_punct = TRUE)
+
+amazon_sent<-
+     amazon_tokenized_sent %>%
+    group_by(id) %>%
+    summarise(max_n_words = max(n_words_sent ),
+              min_n_words = min(n_words_sent))
+
+#Calculate number of stopwords
+
+#install.packages("stopwords")
+library(stopwords)
+stopwords <- get_stopwords() 
+
+stopwords_df <- reviews %>%
+    inner_join(stopwords, by = c(token = "word")) %>%
+    group_by(id) %>%
+    summarize(n_stopwords = n())
+
+#Joining the features in dataframe. 
+amazon_features <-
+  inner_join(amazon, amazon_sent, by = "id") %>%
+  inner_join(., stopwords_df, by = "id")
+
+#Check for swear words (There are none)
+
+ swear_words <- read.csv("https://raw.githubusercontent.com/pdrhlik/sweary/master/data-raw/swear-word-lists/en_English", header = FALSE)
+
+swear_words2 <- read.delim("http://www.cs.cmu.edu/~biglou/resources/bad-words.txt", header = FALSE)
+
+swear_wordsdf <-
+    ifelse(reviews$token %in% swear_words, 1, 0)
+
+sum(swear_wordsdf)
+
+swear_wordsdf2 <-
+    ifelse(reviews$token %in% swear_words2, 1, 0)
+
+sum(swear_wordsdf2)
+
+
+>>>>>>> e022d7ea68fede7a3e4ea43dd776f1ce6a749f27
 ```
 
 ## Non-zero variance features
