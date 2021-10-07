@@ -172,6 +172,7 @@ While $TFIDF_{d,t}$ is extensively applied and very successful in document retri
 (Btw: While linear and logistic regression are scale insensitive because they can absorb scale differences in the regression coefficients, LDA and QDA are insenstive to scaling because the compute Mahalanobis distance and not Euclidean distance. The Mahalanobis distance is the Euclidean distance after standardizing in SVD space.)
 
 ```{r}
+library(quanteda)
 ## Compute token features
 to_tf_idf = . %>% 
     # Compute TF·IDF for each word per sentence 
@@ -183,6 +184,61 @@ to_tf_idf = . %>%
 
 reviewstf <-reviews %>% to_tf_idf() %>% print()
 
+#Calculate number of words
+amazon$n_words<-
+  ntoken(x =amazon$review, 
+         remove_punct = TRUE)
+
+#Calculate number of sentences
+amazon$n_sentences <-
+nsentence(x=amazon$review)
+
+#Calculate maximum and minimum words per sentence. 
+amazon_tokenized_sent <-
+    amazon %>%
+    unnest_tokens(sentence, review, token = 'sentences')
+
+amazon_tokenized_sent$n_words_sent <-
+  ntoken(x = amazon_tokenized_sent$sentence,
+         remove_punct = TRUE)
+
+amazon_sent<-
+     amazon_tokenized_sent %>%
+    group_by(id) %>%
+    summarise(max_n_words = max(n_words_sent ),
+              min_n_words = min(n_words_sent))
+
+#Calculate number of stopwords
+
+#install.packages("stopwords")
+library(stopwords)
+stopwords <- get_stopwords() 
+
+stopwords_df <- reviews %>%
+    inner_join(stopwords, by = c(token = "word")) %>%
+    group_by(id) %>%
+    summarize(n_stopwords = n())
+
+#Joining the features in dataframe. 
+amazon_features <-
+  inner_join(amazon, amazon_sent, by = "id") %>%
+  inner_join(., stopwords_df, by = "id")
+
+#Check for swear words (There are none)
+
+ swear_words <- read.csv("https://raw.githubusercontent.com/pdrhlik/sweary/master/data-raw/swear-word-lists/en_English", header = FALSE)
+
+swear_words2 <- read.delim("http://www.cs.cmu.edu/~biglou/resources/bad-words.txt", header = FALSE)
+
+swear_wordsdf <-
+    ifelse(reviews$token %in% swear_words, 1, 0)
+
+sum(swear_wordsdf)
+
+swear_wordsdf2 <-
+    ifelse(reviews$token %in% swear_words2, 1, 0)
+
+sum(swear_wordsdf2)
 
 
 ```
