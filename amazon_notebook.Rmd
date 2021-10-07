@@ -181,10 +181,7 @@ to_tf_idf = . %>%
     replace_na(list(tf=0, idf=Inf, tf_idf=0))
 
 
-reviewstf <-reviews %>% to_tf_idf() %>% print()
-
-
-
+reviewstf <- reviews %>% to_tf_idf() %>% print()
 ```
 
 ## Non-zero variance features
