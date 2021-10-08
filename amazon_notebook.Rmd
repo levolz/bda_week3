@@ -194,14 +194,16 @@ bad_words_df <- reviews %>%
     summarize(n_bad_words = n())
 
 # calculate negative and positive words
-negative_words <- read.csv("negwords3.txt", sep = "\t", header = FALSE)
+negative_words <- read.csv("https://ptrckprry.com/course/ssd/data/negative-words.txt", sep = "\t", header = FALSE)
+negative_words <- as.data.frame(negative_words[-c(1:33), ])
 colnames(negative_words) <- c("word")
 neg_words_df <- reviews %>%
     inner_join(negative_words, by = c(token = "word")) %>%
     group_by(id) %>%
     summarize(n_neg_words = n())
 
-positive_words <- read.csv("poswords.txt")
+positive_words <- read.csv("https://gist.githubusercontent.com/mkulakowski2/4289437/raw/1bb4d7f9ee82150f339f09b5b1a0e6823d633958/positive-words.txt")
+positive_words <- as.data.frame(positive_words[-c(1:47), ])
 colnames(positive_words) <- c("word")
 pos_words_df <- reviews %>%
     inner_join(positive_words, by = c(token = "word")) %>%
@@ -390,6 +392,29 @@ X = reviewstf  %>%
 
 X[1:8,20:25]
 cat("rows, columns: ", dim(X))
+<<<<<<< HEAD
+=======
+
+features_df$n_words <- unname(features_df$n_words)
+features_df$n_sentences <- unname(features_df$n_sentences)
+features_df$prop_stopwords <- unname(features_df$prop_stopwords)
+features_df$n_swear_words <- unname(features_df$n_swear_words)
+features_df$n_bad_words <- unname(features_df$n_bad_words)
+features_df$n_neg_words <- unname(features_df$n_neg_words)
+features_df$n_pos_words <- unname(features_df$n_pos_words)
+
+features_df[,-c(1,3,4)] <- lapply(features_df[,-c(1,3,4)], as.numeric)
+
+features_df <- features_df %>%
+  mutate_at(c(2, 5:31), ~replace(., is.na(.), 0))
+
+library(Matrix)
+library(Seurat)
+X2 <- as.sparse(features_df[, -c(1,3,4)])
+cbind(X, X2)
+# Target variable
+
+>>>>>>> 6042c27 (commitism)
 ```
 
 ```{r}
