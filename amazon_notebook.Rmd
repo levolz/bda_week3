@@ -8,6 +8,10 @@ output: html_document
 
 library(tidyverse) # metapackage with lots of helpful functions
 library(tidytext)
+require(quanteda)
+library(stopwords)
+library(glmnet)
+require(doMC)
 
 ## Data attached to this notebook
 KAGGLE_RUN <- FALSE
@@ -26,12 +30,13 @@ Answer the 3 most important questions for any ML project:
 
 <div style=color:darkblue;background-color:#fafaff;min-height:8em; >
 
-
 <br>
-<em>... Double tap to type your team's answers to all three questions here ...</em>
+1. The data came from reviews about baby products on Amazon. The results will generalize to the population who will buy baby products and write a review about it. 
 <br>
-
-
+2. The data we will work with is very big and therefore we can not do the feature selection by hand. We can use the Ridge or the Lasso regression  for automatic feature selection.
+<br>
+3. The Bayes error bound means how well humans can predict. In this case, a human would most likely to be able to accurately recognize if a customer is satisfied or not based on the review. We can argue that it’s around 95% accuracy.
+<br>
 
 </div>
 
@@ -45,15 +50,13 @@ if (KAGGLE_RUN) dir("../input", recursive=TRUE)
 
 ```{r}
 # Find the right file path
-if (KAGGLE_RUN) csv_filepath = dir("..", pattern="amazon_baby.csv", recursive=TRUE, full.names = TRUE) else csv_filepath = "amazon_baby_subset.csv"
+if (KAGGLE_RUN) csv_filepath = dir("..", pattern="amazon_baby.csv", recursive=TRUE, full.names = TRUE) else csv_filepath = "amazon_baby.csv"
 
 # Read in the csv file
 amazon = read_csv(csv_filepath) %>%
     rownames_to_column('id') 
-```
 
-```{r}
-head(amazon)
+# head(amazon)
 ```
 
 The data frame contains both the train and test data. The test data are the reviews for which the rating is missing and you need to provide a prediction. 
@@ -78,10 +81,13 @@ Here is code for pasting `name` and `review` using the `unite()` function:
 ```{r}
 # Paste name and review into a single string separated by a "–".
 # The new string replaces the original review.
-amazon = amazon %>% 
+amazon <- amazon %>% 
     unite(review, name, review, sep = " — ", remove = FALSE)
 
-head(amazon)
+#head(amazon)
+
+tfidf <- amazon %>% corpus(., docid_field = "id", text_field = "review") %>% 
+  tokens(.) %>% dfm(.) %>% dfm_tfidf(.) 
 ```
 
 # 3.1 Tokenization
@@ -91,7 +97,7 @@ We're going to use tidytext to break up the text into separate tokens and count 
 ```{r}
 reviews = amazon %>% 
    # tokinize reviews at word level
-   unnest_tokens(token, review) %>%
+   unnest_tokens(token, review) %>% 
 
    # count tokens within reviews as 'n'
    # (keep id, name, and rating in the result)
@@ -121,7 +127,6 @@ sw = reviews %>%
   group_by(id, rating, N) %>% 
   summarise(n_stopwords = sum(n))
 
-head(sw)
 ```
 
 The resulting data frame allows us to relate `rating` to the number stopwords in the review, and check if this relation is statistical significant. To make sure the relation isn't caused by the total number of tokens `N`, we correct for it in the regression:
@@ -172,30 +177,20 @@ While $TFIDF_{d,t}$ is extensively applied and very successful in document retri
 (Btw: While linear and logistic regression are scale insensitive because they can absorb scale differences in the regression coefficients, LDA and QDA are insenstive to scaling because the compute Mahalanobis distance and not Euclidean distance. The Mahalanobis distance is the Euclidean distance after standardizing in SVD space.)
 
 ```{r}
-library(quanteda)
-## Compute token features
-to_tf_idf = . %>% 
-    # Compute TF·IDF for each word per sentence 
-    bind_tf_idf(token, id, n) %>% 
+### Feature generation
 
-    # Words that are not present are NA's but should be 0
-    replace_na(list(tf=0, idf=Inf, tf_idf=0))
-
-
-reviewstf <-reviews %>% to_tf_idf() %>% print()
-
-#Calculate number of words
+## Descriptive
+# Calculate number of words
 amazon$n_words<-
   ntoken(x =amazon$review, 
          remove_punct = TRUE)
 
-#Calculate number of sentences
+# Calculate number of sentences
 amazon$n_sentences <-
 nsentence(x=amazon$review)
 
-#Calculate maximum and minimum words per sentence. 
-amazon_tokenized_sent <-
-    amazon %>%
+# Calculate maximum and minimum words per sentence. 
+amazon_tokenized_sent <- amazon %>%
     unnest_tokens(sentence, review, token = 'sentences')
 
 amazon_tokenized_sent$n_words_sent <-
@@ -208,10 +203,8 @@ amazon_sent<-
     summarise(max_n_words = max(n_words_sent ),
               min_n_words = min(n_words_sent))
 
-#Calculate number of stopwords
+### Calculate number of stopwords
 
-#install.packages("stopwords")
-library(stopwords)
 stopwords <- get_stopwords() 
 
 stopwords_df <- reviews %>%
@@ -219,28 +212,37 @@ stopwords_df <- reviews %>%
     group_by(id) %>%
     summarize(n_stopwords = n())
 
-#Joining the features in dataframe. 
+# Joining the features in dataframe. 
 amazon_features <-
   inner_join(amazon, amazon_sent, by = "id") %>%
   inner_join(., stopwords_df, by = "id")
 
-#Check for swear words (There are none)
-
- swear_words <- read.csv("https://raw.githubusercontent.com/pdrhlik/sweary/master/data-raw/swear-word-lists/en_English", header = FALSE)
-
-swear_words2 <- read.delim("http://www.cs.cmu.edu/~biglou/resources/bad-words.txt", header = FALSE)
-
-swear_wordsdf <-
-    ifelse(reviews$token %in% swear_words, 1, 0)
-
+# Check for swear words
+swear_words <- read.csv("https://raw.githubusercontent.com/pdrhlik/sweary/master/data-raw/swear-word-lists/en_English", header = FALSE)
+swear_wordsdf <- ifelse(reviews$token %in% swear_words, 1, 0)
 sum(swear_wordsdf)
 
-swear_wordsdf2 <-
-    ifelse(reviews$token %in% swear_words2, 1, 0)
-
+swear_words2 <- read.delim("http://www.cs.cmu.edu/~biglou/resources/bad-words.txt", header = FALSE)
+swear_wordsdf2 <- ifelse(reviews$token %in% swear_words2, 1, 0)
 sum(swear_wordsdf2)
 
+amazon_features <-
+  inner_join(amazon, amazon_sent, by = "id") %>%
+  inner_join(., stopwords_df, by = "id") %>%
+  
+  #Calculate proportion of stopwords
+  mutate(prop_stopwords= n_stopwords/ n_words)
 
+# ## Compute token features
+# to_tf_idf = . %>% 
+#     # Compute TF·IDF for each word per sentence 
+#     bind_tf_idf(token, id, n) %>% 
+# 
+#     # Words that are not present are NA's but should be 0
+#     replace_na(list(tf=0, idf=Inf, tf_idf=0))
+# 
+# 
+# reviewstf <- reviews %>% to_tf_idf() %>% print()
 ```
 
 ## Non-zero variance features
@@ -261,10 +263,6 @@ we can filter the rows in `features` for which $-\log(\text{df}_t / N) \leq -\lo
 reviews_relfreq <- reviewstf %>%
   filter(idf < -log(0.01/100))   
 reviews_relfreq
-
-
-
-
 ```
 
 ## Correlated features
@@ -323,19 +321,30 @@ X = reviewstf  %>%
 X[1:8,20:25]
 cat("rows, columns: ", dim(X))
 
-
 # Target variable
-
+target <- amazon$rating[trainidx]
 ```
 
 ```{r}
 # Split design matrix and target into training and test portions
-
+train_set <-  dfm_subset(tfidf, trainidx) #X[trainidx,]
+test_set <- dfm_subset(tfidf, !trainidx)
 ```
 
 ```{r}
 # Fit model
+if (KAGGLE_RUN) registerDoMC(cores = 4) else registerDoMC(cores = 2)  # for parallel computing
 
+model_interval <- glmnet(train_set, target, family = "g", alpha=1, trace.it = TRUE)
+model_binary <- glmnet(train_set, as.factor(I(target > 3)), family = "b", alpha=1, trace.it = TRUE)
+
+plot(model_interval)
+
+cv_interval <- cv.glmnet(train_set, target, family = "g", alpha = 1, trace.it = TRUE)
+cv_binary <- cv.glmnet(train_set, as.factor(I(target > 3)), family = "g", alpha = 1, trace.it = TRUE)
+
+
+plot(cv)
 ```
 
 # 5.2 Model evaluation
@@ -347,6 +356,7 @@ Try to understand what the model does, and consider drawing some conclusions.
 
 ```{r}
 # Performance evaluation
+pred <- predict(model_interval, newx = test_set, s = cv_interval$lambda.min, type = "response")
 
 ```
 
@@ -354,7 +364,7 @@ Try to understand what the model does, and consider drawing some conclusions.
 # Model comparisons
 
 
-# Insight into model behavior
+# Insight into model behaviour
 ```
 
 
@@ -363,11 +373,10 @@ Try to understand what the model does, and consider drawing some conclusions.
 A sample file is provided to make sure that you predict the right cases and submit your predictions in the right format:
 
 ```{r}
-sample_filepath = dir("..", pattern="amazon_baby_testset_sample.csv", recursive=TRUE, full.names = TRUE)
-
-sample_submission = read_csv(sample_filepath, col_types = cols(col_character(), col_double()))
-
-head(sample_submission)
+if (!KAGGLE_RUN) {
+  sample_filepath = dir("..", pattern="amazon_baby_testset_sample.csv", recursive=TRUE, full.names = TRUE)  
+  sample_submission = read_csv(sample_filepath, col_types = cols(col_character(), col_double()))
+  head(sample_submission)}
 ```
 
 ```{r}
