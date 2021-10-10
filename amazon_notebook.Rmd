@@ -384,7 +384,7 @@ cv_binary <- cv.glmnet(X_train, y, family = "b", alpha = 1, trace.it = TRUE)
 
 plot(cv_binary)
 
-doMC::registerDoMC(cores = 4)
+#doMC::registerDoMC(cores = 4)
 
 cv_fitridge <- glmnet::cv.glmnet(X_train, y, family = "binomial", parallel = TRUE, type.measure = "auc", nfolds = 4, alpha = 0)
 
@@ -398,6 +398,8 @@ plot(cv_fitlasso)
 
 pred_lasso <- predict(cv_fitlasso, X_test, s = 'lambda.min', type = 'class') %>%
     factor()
+
+
 
 acc_lasso <- mean(pred_lasso == y)
 acc_lasso 
@@ -418,6 +420,8 @@ Try to understand what the model does, and consider drawing some conclusions.
 # Performance evaluation
 pred <- predict(model_binary, newx = X_test, s = cv_binary$lambda.min, type = "response")
 pred
+
+pred_lasso2 <- predict(cv_fitlasso, X_test, s = 'lambda.min', type = "response")
 ```
 
 ```{r}
@@ -439,13 +443,13 @@ if (!KAGGLE_RUN) {
 
 ```{r}
 
-as_tibble(pred_lasso, rownames = "Id") %>% 
+as_tibble(pred_lasso2, rownames = "Id") %>% 
   rename(Prediction = 'lambda.min') %>% 
   mutate(Id = as.numeric(Id)) %>% 
   arrange(Id) %>% 
-  write_csv("submission.csv")
+  write_csv("prediction.csv")
 
-file.show("submission.csv")
+file.show("prediction.csv")
 
 sample_filepath = dir("..", pattern="submission.csv", recursive=TRUE, full.names = TRUE)
 sample_submission = read_csv(sample_filepath, col_types = cols(col_character(), col_double()))
