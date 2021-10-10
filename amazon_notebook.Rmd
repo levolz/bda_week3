@@ -64,6 +64,7 @@ amazon <- amazon %>%
 
 ```{r}
 # Create train and test data
+set.seed(1)
 amazon_train <- amazon[trainidx,] %>% sample_n(20000)
 amazon_test <- amazon[!trainidx,] 
 
@@ -83,11 +84,18 @@ reviews = amazon %>%
    unnest_tokens(token, review) %>%
    # count tokens within reviews as 'n'
    # (keep id, name, and rating in the result)
-   group_by(id, token) %>%
-                 mutate(n = n()) %>%
-        distinct()
+          count(id, name, rating, token)
 
 head(reviews)
+
+to_tf_idf = . %>% 
+    # Compute TF·IDF for each word per sentence 
+    bind_tf_idf(token, id, n) %>% 
+
+    # Words that are not present are NA's but should be 0
+    replace_na(list(tf=0, idf=Inf, tf_idf=0))
+
+reviewstf <-reviews %>% to_tf_idf() %>% print()
 ```
 
 # 4. Features engineering
@@ -238,7 +246,7 @@ nrc_features_df <- reviews %>%
 nrc_features_df[is.na(nrc_features_df)] <- 0
 amazon_features <- amazon_features %>%
   inner_join(nrc_features_df, by = "id")
-amazon_features <- amazon_features[,-c(2,27)]
+amazon_features <- amazon_features[,-c(2,26)]
 download.file("http://www2.imm.dtu.dk/pubdb/edoc/imm6010.zip","afinn.zip")
 unzip("afinn.zip")
 afinn = read.delim("AFINN/AFINN-111.txt", sep="\t", col.names = c('word', 'score'), stringsAsFactors = FALSE)
@@ -275,9 +283,9 @@ we can filter the rows in `features` for which $-\log(\text{df}_t / N) \leq -\lo
 
 ```{r}
 # Near-zero variance features
-reviews_relfreq <- reviewstf %>%
+reviewstf <- reviewstf %>%
   filter(idf < -log(0.01/100))   
-reviews_relfreq
+reviewstf
 ```
 
 ## Correlated features
@@ -324,8 +332,8 @@ As said, `glmnet()` allows you to tune the flexibility of the model by means of 
 ```{r}
 ## Prepare features for glmnet
 
-features_df$name <- as.numeric(features_df$name)
-features_all$tf_idf <- as.numeric(features_all$tf_idf)
+features_df <- dplyr::select(features_df, -name)
+
 features <- features_df %>%
     select(id, everything()) %>%
     gather(2:ncol(features_df),
@@ -335,6 +343,9 @@ features <- features_df %>%
 features_all <- reviewstf %>%
     select(id, token, tf_idf) %>%
     rbind(features)
+
+
+features_all$tf_idf <- as.numeric(features_all$tf_idf)
 
 #Make a matrix
 
@@ -373,6 +384,27 @@ cv_binary <- cv.glmnet(X_train, y, family = "b", alpha = 1, trace.it = TRUE)
 
 plot(cv_binary)
 
+doMC::registerDoMC(cores = 4)
+
+cv_fitridge <- glmnet::cv.glmnet(X_train, y, family = "binomial", parallel = TRUE, type.measure = "auc", nfolds = 4, alpha = 0)
+
+pred_ridge <- predict(cv_fitridge, X_test,s = cv_fitridge$lambda.min, type = 'class') %>%
+    factor()
+
+
+
+cv_fitlasso <- glmnet::cv.glmnet(X_train, y, family = "binomial", parallel = TRUE, type.measure = "auc", nfolds = 4, alpha = 1)
+plot(cv_fitlasso)
+
+pred_lasso <- predict(cv_fitlasso, X_test, s = 'lambda.min', type = 'class') %>%
+    factor()
+
+acc_lasso <- mean(pred_lasso == y)
+acc_lasso 
+
+
+
+
 ```
 
 # 5.2 Model evaluation
@@ -384,7 +416,8 @@ Try to understand what the model does, and consider drawing some conclusions.
 
 ```{r}
 # Performance evaluation
-pred <- predict(model_binary, newx = test_set, s = cv_binary$lambda.min, type = "response")
+pred <- predict(model_binary, newx = X_test, s = cv_binary$lambda.min, type = "response")
+pred
 ```
 
 ```{r}
@@ -405,5 +438,18 @@ if (!KAGGLE_RUN) {
 ```
 
 ```{r}
-submission <- pred %>% as.data.frame(.) %>% mutate(Id = rownames(.), Prediction = s1) %>% select(-s1)
-write.csv(submission, "prediction.csv")
+
+as_tibble(pred_lasso, rownames = "Id") %>% 
+  rename(Prediction = 'lambda.min') %>% 
+  mutate(Id = as.numeric(Id)) %>% 
+  arrange(Id) %>% 
+  write_csv("submission.csv")
+
+file.show("submission.csv")
+
+sample_filepath = dir("..", pattern="submission.csv", recursive=TRUE, full.names = TRUE)
+sample_submission = read_csv(sample_filepath, col_types = cols(col_character(), col_double()))
+head(sample_submission)
+
+```
+
