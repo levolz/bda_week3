@@ -1,0 +1,517 @@
+---
+title: "ppp"
+author: "Competition 3"
+date: "8-10-2021"
+output: html_document
+---
+
+```{r}
+## Importing packages
+library(tidyverse) # metapackage with lots of helpful functions
+library(tidytext)
+require(quanteda)
+library(stopwords)
+library(glmnet)
+require(doMC)
+## Data attached to this notebook
+KAGGLE_RUN <- TRUE
+if (KAGGLE_RUN) list.files(path = "../input")
+```
+
+# 1. The project
+
+1.	Where do the data come from? (To which population will results generalize?)
+
+The data is from reviews about baby products on Amazon. The results will generalize to the population who will buy baby products and write a review about it. 
+
+2. What are candidate machine learning methods? (models? features?)
+
+We thought good candidate machine learning methods would be logistic regression for classification, since there is a binary outcome variable. The data we will work with is very big and therefore we can not do the feature selection by hand. The Lasso and the ridge regression are used for automoatic feature selection. The features we will use are tables such as the TF-IDF and less difficult text features such as swear words and sentence length.
+
+3. What is the Bayes' error bound?
+
+As far as we understand, the Bayes' error bound is the probability with which a human could estimate correctly what our model is trying to predict. Since the outcome variable is binary, and not the estimation of any of the five stars, we think a human would be very good at estimating the rating. We estimated ourselves that it would be at least a probability of .95. 
+
+
+# 2. Read Data
+
+We've located and read the data into the files.
+
+```{r}
+if (KAGGLE_RUN) dir("../input", recursive=TRUE)
+```
+
+```{r}
+# Find the right file path
+if (KAGGLE_RUN) csv_filepath = dir("..", pattern="amazon_baby.csv", recursive=TRUE, full.names = TRUE) else csv_filepath = "amazon_baby.csv"
+# Read in the csv file
+amazon = read_csv(csv_filepath) %>%
+    rownames_to_column('id') 
+# head(amazon)
+```
+
+```{r}
+trainidx = !is.na(amazon$rating)
+table(trainidx)
+```
+# 3. Preprocessing
+
+```{r}
+# Paste name and review into a single string separated by a "–".
+# The new string replaces the original review.
+amazon <- amazon %>% 
+    unite(review, name, review, sep = " — ", remove = FALSE)
+#head(amazon)
+
+
+```
+
+```{r}
+# Create train and test data
+set.seed(1)
+amazon_train <- amazon %>%
+                filter(!is.na(rating))%>% 
+                 sample_n(20000)
+
+amazon_test <- amazon%>%
+                filter(is.na(rating))
+
+amazon <- full_join(amazon_train,amazon_test)
+
+```
+## Tokenization
+
+We've tokenized the amazon reviews.
+We could also look at bi-grams or n-grams, as long as the n-grams aren't sentences. Bi-grams is something we have not looked into as far as I know.  
+
+```{r}
+reviews = amazon %>% 
+
+   # tokinize reviews at word level
+   unnest_tokens(token, review) %>%
+
+   # count tokens within reviews as 'n'
+   # (keep id, name, and rating in the result)
+          group_by(id, token) %>%
+                 mutate(n = n()) %>%
+        distinct()
+
+
+
+head(reviews)
+```
+
+# 4. Features engineering
+
+Features were computed for tokens in text, the features we used are described per category
+
+Simple counts were used and the proportions were taken to create features. these features are:
+* Minimum & Maximum
+* (proportion of) Stopwords
+* (proportion of) Swear words, bad words, negative words and positive words
+
+Other sentence or review related features:
+* Average sentence Length
+
+Term Frequency was calculated.
+Inverse Document Frequency was calculated.
+TF-IDF, the product of the two previous features, was calculated.
+
+Valence word(lists) features
+* NRC
+* AFINN
+* VADER
+
+```{r}
+## Compute token features
+tfidf <- reviews %>%
+    bind_tf_idf(token, id, n)
+
+# count the number of words for each id
+n_words <- reviews %>% 
+    group_by(id) %>%
+    count() %>%
+    transmute(id, n_words = n)
+
+# count the number of sentences for each id 
+reviews_sentences <- amazon %>%
+    unnest_tokens(sentence, review, token = 'sentences')
+
+n_sentences <- reviews_sentences %>% 
+    group_by(id) %>%
+    count() %>%
+    transmute(id, n_sentences = n)
+
+# Calculate the average amount of words ,minimum and maximum words per sentence per review
+
+reviews_sentences$n_words_sent <-
+  ntoken(x = reviews_sentences$sentence,
+         remove_punct = TRUE)
+
+    sent_scores <- 
+    reviews_sentences %>%
+    group_by(id) %>%
+    summarise(mean_n_words = mean(n_words_sent), 
+              max_n_words = max(n_words_sent),
+              min_n_words = min(n_words_sent))
+
+#Calculate number of stopwords
+stopwords <- get_stopwords() 
+
+stopwords_df <- reviews %>%
+    semi_join(stopwords, by = c(token = "word")) %>%
+    group_by(id) %>%
+    summarize(n_stopwords = n()) 
+
+amazon_features <- amazon %>%
+  inner_join(n_words, by = "id") %>%
+  inner_join(n_sentences, by = "id") %>%
+  inner_join(sent_scores, by = "id") %>%
+  inner_join(stopwords_df, by = "id") %>%
+
+  #Calculate proportion of stopwords
+  mutate(prop_stopwords = n_stopwords / n_words)
+
+#remove non-proportioned stopwords
+amazon_features <- amazon_features[,-10]
+
+
+```
+
+```{r}
+#calculate proportion of swearwords, bad words
+swear_words <- read.csv("https://raw.githubusercontent.com/pdrhlik/sweary/master/data-raw/swear-word-lists/en_English", header = FALSE)
+colnames(swear_words) <- c("word")
+
+swear_words_df <- reviews %>%
+    inner_join(swear_words, by = c(token = "word") ) %>%
+    group_by(id) %>%
+    summarize(n_swear_words = n())
+
+bad_words <- read.delim("http://www.cs.cmu.edu/~biglou/resources/bad-words.txt", header = FALSE)
+colnames(bad_words) <- c("word")
+
+bad_words_df <- reviews %>%
+    inner_join(bad_words, by = c(token = "word")) %>%
+    group_by(id) %>%
+    summarize(n_bad_words = n())
+
+# calculate negative and positive words
+negative_words <- read.csv("https://ptrckprry.com/course/ssd/data/negative-words.txt", sep = "\t", header = FALSE)
+negative_words <- as.data.frame(negative_words[-c(1:33), ])
+
+colnames(negative_words) <- c("word")
+neg_words_df <- reviews %>%
+    inner_join(negative_words, by = c(token = "word")) %>%
+    group_by(id) %>%
+    summarize(n_neg_words = n())
+
+positive_words <- read.csv("https://gist.githubusercontent.com/mkulakowski2/4289437/raw/1bb4d7f9ee82150f339f09b5b1a0e6823d633958/positive-words.txt")
+positive_words <- as.data.frame(positive_words[-c(1:47), ])
+
+colnames(positive_words) <- c("word")
+pos_words_df <- reviews %>%
+    inner_join(positive_words, by = c(token = "word")) %>%
+    group_by(id) %>%
+    summarize(n_pos_words = n())
+
+amazon_features <- amazon_features %>%
+  left_join(swear_words_df, by = "id") %>%
+  left_join(bad_words_df, by = "id") %>%
+  left_join(neg_words_df, by = "id") %>%
+  left_join(pos_words_df, by = "id") %>%
+
+  #Calculate proportion of stopwords
+  mutate(n_swear_words = n_swear_words/ n_words) %>% 
+  mutate(n_bad_words = n_bad_words/n_words) %>%
+  mutate(n_neg_words = n_neg_words/n_words) %>%
+  mutate(n_pos_words = n_pos_words/n_words)
+
+
+# calculate the average sentence length
+sentence_length_df <-
+  reviews %>%
+  unnest_tokens(token, token, token = 'sentences') %>%
+  mutate(len = nchar(token)) %>%
+  group_by(id) %>%
+  summarize(avg_sentence_length = mean(len))
+
+amazon_features <- amazon_features %>%
+  inner_join(sentence_length_df, by = "id") %>%
+  mutate(prop_length = n_words/max(n_words))
+
+```
+
+```{r}
+load_nrc = function() {
+  if (!file.exists('nrc.txt'))
+    download.file("https://www.dropbox.com/s/yo5o476zk8j5ujg/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt?dl=1",'nrc.txt')
+  nrc = read.table('nrc.txt', col.names=c('word','sentiment','applies'), stringsAsFactors = FALSE)
+  nrc %>% 
+    filter(applies==1) %>% 
+    select(-applies)
+}
+nrc <- load_nrc()
+
+nrc_features_df <- reviews %>%
+  inner_join(nrc, by = c(token = 'word')) %>%
+  group_by(id) %>%
+  mutate(n = n(sentiment)) %>% 
+  #ungroup() %>%
+  pivot_wider(names_from = sentiment, values_from = n)
+
+nrc_features_df[is.na(nrc_features_df)] <- 0
+
+amazon_features <- amazon_features %>%
+  inner_join(nrc_features_df, by = "id")
+
+
+download.file("http://www2.imm.dtu.dk/pubdb/edoc/imm6010.zip","afinn.zip")
+unzip("afinn.zip")
+afinn = read.delim("AFINN/AFINN-111.txt", sep="\t", col.names = c('word', 'score'), stringsAsFactors = FALSE)
+
+  # labelling the sentiment of each word using inner_join()
+features_df <- lexicon_features_df <- reviews %>%
+  right_join(afinn, by = c(token = 'word')) %>%
+  group_by(id) %>%
+  summarise (afinn_mean = mean(score)) %>%
+  ungroup() %>%
+  inner_join(amazon_features, by = 'id')
+
+```
+
+## Non-zero variance features
+
+Features that have almost no variance across cases cannot provide a lot of information about the target variable. Variance across cases is the leading principle in any data context. For binary and count data as considered here the variance is determined by the average (that's a mathetmatical fact). Hence, for the current data we can look simply at document frequencies and do not need to compute variances. 
+
+We will remove tokens that occur in less than 0.01% of the documents (there are ~180,000 reviews in the data set; less than 0.01% &times; 180,000 reviews = 18 of the reviews). The number 0.01% is quite arbitrary, but will remove idiosyncratic strings and miss-spellings that occur only in singular reviews. 
+
+Since $IDF_t$, the column `idf`, which measures the surprise of a `token` $t$, is computed as 
+
+$$IDF_t = -\log\left({\text{df}_t \over N}\right) = -\log(\text{proportion of document in which }t\text{ occurs})$$ 
+
+we can filter the rows in `features` for which $-\log(\text{df}_t / N) \leq -\log(0.01\%)$ (i.e., the 'surprise' should be lower than $-\log(0.01/100)$).
+
+
+```{r}
+# Near-zero variance features
+reviews_zero <- tfidf %>%
+  filter(idf < -log(0.01/100))   
+reviews_zero
+```
+
+## Correlated features
+
+Although correlated features may exist, with thousands of features it's computationally too cumbersome to try to remove them directly. Instead we'll have to rely on the properties of the Lasso and Ridge regression to deal with them (look it up in the ISLR book; it might come up in an exam question).
+
+
+
+# 5. Models
+
+## Not relying on manual feature selection
+
+In the Personality competition we computed features by utilizing word lists that in previous research were found to be predictive of sentiment. This requires substantial input from experts on the subject. If such knowledge is not (yet) available a process of trial and error can be used. But with many thousands of features automation of this process is essential. 
+
+
+In addition forward and/or backward selection, automated methods that try to automatically ballance flexibility and predictive performance are
+
+1. Lasso and Ridge regression
+2. Principal Components and Partial Least Squares regression
+3. Smoothing 
+4. Regression and Classification trees (CART)
+5. Random Forests
+6. Support Vector Machines
+
+Methods (1) and (2) on this list involve methods are able to take many features while automatically reducing redundant flexibility to any desired level. Multicollinearity, the epithome of reduancy, is also automatically taken care of by these methods.
+
+Number (3) on the list, smoothing, grants more flexibility by allowing for some non-linearity in the relations between features and the target variable, without the need to manually specify a specific mathematical form (as is necessary in polynomial regression).
+
+Methods (4), (5), and (6) are not only able to remove redundant features, but also can automatically recognize interactions between  features.
+
+Hence, all of these methods remove the necessity of finding the best features by hand. 
+
+All of these methods are associated with a small set of 1 to 3 (or 4 in some cases) parameters that control the flexibility of the model in a more or less continuous way&mdash;much like the $k$ parameter in k-nearest neighbers. Like the $k$ parameter in k-NN, these parameters can and need to be adjusted (*'tuned'*) for optimal predictive performance. Tuning is best done on a validation set (a subset from the training data), or using cross-validation, depending on the size of the data set.
+
+# 5.1 Model fitting
+
+Not all algorithms can deal with sparse matrices. For instance `lm()` can't. The package `glmnet`, which is extensively discussed in chapter 6 of ISLR, has a function with the same name `glmnet()` which can handle sparse matrices, and also allow you to reduce the model's flexibility by means of the Lasso penalty or ridge regression penalty. Furthermore, like the standard `glm()` function, it can also handle a variety of dependent variable families, including gaussian (for linear regression), binomial (for logistic regression), multinomial (for multinomial logistic regression), Poisson (for contingency tables and counts), and a few others. It is also quite caple of dealing computationally efficiently with the many features we have here.
+
+> <span style=color:brown>The aim of this competition is the predict the probability that a customer is ***satisfied***. This is deemed to be the case if `rating > 3`.  Hence, you will need as a dependent variable `y` a factor that specifies whether this is the case. </span>
+The performance of your submission will be evaluated using the area under the curve (AUC) of the receiver operating curve (ROC). See chapter 4 in the ISLR book. See also the help file for how `cv.glmnet` can works with this measure.
+
+As said, `glmnet()` allows you to tune the flexibility of the model by means of _regularizing_ the regression coefficients. The type of regularization (i.e., the Lasso or ridge) that is used is controled by the `alpha` parameter. Refer to the book for an explanation. The amount of regularization is specified by means of the `lambda` parameter. Read the warning in the `help(glmnet)` documentation about changing this parameter. To tune this parameter look at the `cv.glmnet()` function.
+
+```{r}
+## Prepare features for glmnet
+features_df <- features_df %>%
+select( ,-3) #removing the review column 
+#features_df <- features_df %>%
+#select(,-4) #removing rating
+
+
+features_df$n_swear_words <- features_df$n_swear_words %>% 
+replace_na(0)
+
+features_df$n_bad_words<- features_df$n_bad_words %>% 
+replace_na(0)
+
+features_df$n_pos_words <- features_df$n_pos_words %>% 
+replace_na(0)
+
+features_df$n_neg_words <- features_df$n_neg_words %>% 
+replace_na(0)
+
+features_df$prop_stopwords<- features_df$prop_stopwords %>% 
+replace_na(0)
+
+features_df$afinn_mean <- features_df$afinn_mean %>%
+replace_na(0)
+
+features_df <- dplyr::select(features_df, -name)
+
+#features_df$name <- features_df$name %>%
+#as.factor()
+
+#name_feature <- features_df %>%
+            #select(id, name) %>%
+            #group_by(id) %>%
+            #count(name) %>%
+            #pivot_wider(names_from = name, values_from = n)
+
+#name_feature[is.na(name_feature)] <- 0
+
+#features_df <- features_df %>%
+  #inner_join(name_feature, by = "id")
+
+
+features <- features_df %>%
+    select(id, everything()) %>%
+    gather(2:ncol(features_df),
+           key = token,
+           value = tf_idf)
+
+features_all <- reviews_zero %>%
+    select(id, token, tf_idf) %>%
+    rbind(features)
+
+
+
+
+
+str(features_df)
+
+# Features to design matrix
+X = features_all %>%
+    cast_sparse(id, token, tf_idf) %>% 
+    # Remove rows that do not belong to cases
+    .[!is.na(rownames(.)),]
+
+
+```
+
+```{r}
+# Split design matrix and target into training and test portions
+X_train <- X[rownames(X) %in% amazon_train$id,]
+X_test <- X[rownames(X) %in% amazon_test$id,]
+X_train[1:8,20:25]
+X_test[1:8,20:25]
+
+dim(X_train)
+dim(X_test)
+
+
+# Target variable
+y <- amazon %>%
+    filter(!is.na(rating)) %>%
+    mutate(satisfied = rating > 3) %>%
+    pull(satisfied) %>%
+    as.factor()
+
+table(y)
+```
+
+
+
+
+
+```{r}
+# Fit model
+cv_lasso = glmnet::cv.glmnet(X_train, y, family = "binomial", type.measure = "auc")
+plot(cv_lasso)
+
+cv_ridge <- glmnet::cv.glmnet(X_train, y, family = "binomial", type.measure = "auc", alpha = 0)
+plot(cv_ridge)
+
+pred_lasso <- predict(cv_lasso, X_test, s = 'lambda.min', type = 'class') %>% 
+    factor()
+acc_lasso <- mean(pred_lasso == y)
+acc_lasso
+
+pred_ridge <- predict(cv_ridge, X_test, s = 'lambda.min', type = 'class') %>%
+    factor()
+acc_ridge <- mean(pred_ridge == y)
+acc_ridge
+
+model_binary <- glmnet(X_train, y, family = "binomial", alpha=1, trace.it = 1, nlambda = 5, type.measure = "auc")
+
+plot(model_binary)
+
+cv_binary <- cv.glmnet(X_train, y, family = "b", alpha = 1, trace.it = TRUE)
+
+plot(cv_binary)
+```
+
+```{r}
+
+
+pred <- predict(model_binary, newx = X_test, s = cv_binary$lambda.min, type = "response")
+pred
+
+```
+```{r}
+```
+# 5.2 Model evaluation
+
+
+To evaluate the model you can look at various predictive performance measures. Given that AUC is the performance measure used to rate your submission in this competition, it is of special importance. But other performance indicators are interesting to look at too. Consider tabulating and/or graphing performance differences from tuning and different models.
+
+Try to understand what the model does, and consider drawing some conclusions.
+
+```{r}
+# Performance evaluation
+
+```
+
+```{r}
+# Model comparisons
+# Insight into model behaviour
+```
+
+
+# 6. Submitting your predictions
+
+A sample file is provided to make sure that you predict the right cases and submit your predictions in the right format:
+
+```{r}
+if (!KAGGLE_RUN) {
+  sample_filepath = dir("..", pattern="amazon_baby_testset_sample.csv", recursive=TRUE, full.names = TRUE)  
+  sample_submission = read_csv(sample_filepath, col_types = cols(col_character(), col_double()))
+  head(sample_submission)}
+```
+
+```{r}
+
+as_tibble(pred, rownames = "Id") %>% 
+  rename(Prediction = 's1') %>% 
+  mutate(Id = as.numeric(Id)) %>% 
+  arrange(Id) %>% 
+  write_csv("prediction.csv")
+
+file.show("prediction.csv")
+
+sample_filepath = dir("..", pattern="submission.csv", recursive=TRUE, full.names = TRUE)
+sample_submission = read_csv(sample_filepath, col_types = cols(col_character(), col_double()))
+head(sample_submission)
+
+```
+
