@@ -92,9 +92,10 @@ reviews = amazon %>%
 
    # count tokens within reviews as 'n'
    # (keep id, name, and rating in the result)
-          group_by(id, token) %>%
+        group_by(id, token) %>%
                  mutate(n = n()) %>%
         distinct()
+
 
 
 
@@ -124,23 +125,23 @@ Valence word(lists) features
 
 ```{r}
 ## Compute token features
+# TF-IDF feature
+## Compute token features
 tfidf <- reviews %>%
     bind_tf_idf(token, id, n)
 
+
 # count the number of words for each id
-n_words <- reviews %>% 
-    group_by(id) %>%
-    count() %>%
-    transmute(id, n_words = n)
+amazon$n_words<-
+  ntoken(x =amazon$review, 
+         remove_punct = TRUE)
 
 # count the number of sentences for each id 
+amazon$n_sentences <-
+nsentence(x=amazon$review)
+
 reviews_sentences <- amazon %>%
     unnest_tokens(sentence, review, token = 'sentences')
-
-n_sentences <- reviews_sentences %>% 
-    group_by(id) %>%
-    count() %>%
-    transmute(id, n_sentences = n)
 
 # Calculate the average amount of words ,minimum and maximum words per sentence per review
 
@@ -164,13 +165,13 @@ stopwords_df <- reviews %>%
     summarize(n_stopwords = n()) 
 
 amazon_features <- amazon %>%
-  inner_join(n_words, by = "id") %>%
-  inner_join(n_sentences, by = "id") %>%
+  #inner_join(n_words, by = "id") %>%
+  #inner_join(n_sentences, by = "id") %>%
   inner_join(sent_scores, by = "id") %>%
-  inner_join(stopwords_df, by = "id") %>%
+  left_join(stopwords_df, by = "id") %>%
 
   #Calculate proportion of stopwords
-  mutate(prop_stopwords = n_stopwords / n_words)
+  mutate(prop_stopwords = n_stopwords/ n_words)
 
 #remove non-proportioned stopwords
 amazon_features <- amazon_features[,-10]
@@ -240,6 +241,8 @@ amazon_features <- amazon_features %>%
   inner_join(sentence_length_df, by = "id") %>%
   mutate(prop_length = n_words/max(n_words))
 
+rm(swear_words_df,bad_words_df, neg_words_df, pos_words_df, sentence_length_df, sent_scores, stopwords_df)
+
 ```
 
 ```{r}
@@ -256,7 +259,7 @@ nrc <- load_nrc()
 nrc_features_df <- reviews %>%
   inner_join(nrc, by = c(token = 'word')) %>%
   group_by(id) %>%
-  mutate(n = n(sentiment)) %>% 
+  count(sentiment) %>% 
   #ungroup() %>%
   pivot_wider(names_from = sentiment, values_from = n)
 
@@ -342,9 +345,10 @@ The performance of your submission will be evaluated using the area under the cu
 As said, `glmnet()` allows you to tune the flexibility of the model by means of _regularizing_ the regression coefficients. The type of regularization (i.e., the Lasso or ridge) that is used is controled by the `alpha` parameter. Refer to the book for an explanation. The amount of regularization is specified by means of the `lambda` parameter. Read the warning in the `help(glmnet)` documentation about changing this parameter. To tune this parameter look at the `cv.glmnet()` function.
 
 ```{r}
+
 ## Prepare features for glmnet
 features_df <- features_df %>%
-select( ,-3) #removing the review column 
+select(,-3) #removing the review column 
 #features_df <- features_df %>%
 #select(,-4) #removing rating
 
@@ -367,7 +371,7 @@ replace_na(0)
 features_df$afinn_mean <- features_df$afinn_mean %>%
 replace_na(0)
 
-features_df <- dplyr::select(features_df, -name)
+#features_df <- dplyr::select(features_df, -name)
 
 #features_df$name <- features_df$name %>%
 #as.factor()
@@ -395,10 +399,9 @@ features_all <- reviews_zero %>%
     rbind(features)
 
 
-
-
-
 str(features_df)
+
+
 
 # Features to design matrix
 X = features_all %>%
@@ -420,11 +423,12 @@ dim(X_train)
 dim(X_test)
 
 
+
 # Target variable
 y <- amazon %>%
     filter(!is.na(rating)) %>%
-    mutate(satisfied = rating > 3) %>%
-    pull(satisfied) %>%
+    mutate(happy = rating > 3) %>%
+    pull(happy) %>%
     as.factor()
 
 table(y)
@@ -436,22 +440,17 @@ table(y)
 
 ```{r}
 # Fit model
+# Fit model
+
+#Fit Lasso
 cv_lasso = glmnet::cv.glmnet(X_train, y, family = "binomial", type.measure = "auc")
 plot(cv_lasso)
 
+#Fit ridge
 cv_ridge <- glmnet::cv.glmnet(X_train, y, family = "binomial", type.measure = "auc", alpha = 0)
 plot(cv_ridge)
 
-pred_lasso <- predict(cv_lasso, X_test, s = 'lambda.min', type = 'class') %>% 
-    factor()
-acc_lasso <- mean(pred_lasso == y)
-acc_lasso
-
-pred_ridge <- predict(cv_ridge, X_test, s = 'lambda.min', type = 'class') %>%
-    factor()
-acc_ridge <- mean(pred_ridge == y)
-acc_ridge
-
+#Fit binominal logistic regression
 model_binary <- glmnet(X_train, y, family = "binomial", alpha=1, trace.it = 1, nlambda = 5, type.measure = "auc")
 
 plot(model_binary)
@@ -461,15 +460,7 @@ cv_binary <- cv.glmnet(X_train, y, family = "b", alpha = 1, trace.it = TRUE)
 plot(cv_binary)
 ```
 
-```{r}
 
-
-pred <- predict(model_binary, newx = X_test, s = cv_binary$lambda.min, type = "response")
-pred
-
-```
-```{r}
-```
 # 5.2 Model evaluation
 
 
@@ -479,12 +470,60 @@ Try to understand what the model does, and consider drawing some conclusions.
 
 ```{r}
 # Performance evaluation
+pred_lasso <- predict(cv_lasso, X_test, s = 'lambda.min', type = 'class') %>% 
+    factor()
+
+acc_lasso <- mean(pred_lasso == y)
+acc_lasso
+
+pred_ridge <- predict(cv_ridge, X_test, s = 'lambda.min', type = 'class') %>%
+    factor()
+
+acc_ridge <- mean(pred_ridge == y)
+acc_ridge
+
+
+pred <- predict(model_binary, newx = X_test, s = cv_binary$lambda.min, type = "response")
+pred
 
 ```
 
 ```{r}
 # Model comparisons
-# Insight into model behaviour
+# Model comparisons (Credit to group 4)
+
+# Performance evaluation
+# For lasso
+lasso_AUC <- max(cv_lasso$cvm)
+lasso_acc <- mean(pred_lasso == y)
+
+# For ridge
+ridge_AUC <- max(cv_ridge$cvm)
+ridge_acc <- mean(pred_ridge == y)
+
+# For binominal logistic regression
+model_binary_AUC <- max(cv_binary$cvm)
+model_binary_acc <- mean(pred == y)
+
+model_comp <- data.frame(models = c("Lasso", "Ridge", "Binary Log"),
+                AUC = c(lasso_AUC, ridge_AUC, model_binary_AUC))
+
+# Show the predictive performance measures
+model_comp
+
+model_comp <- model_comp %>% mutate(ToHighlight = ifelse( AUC == max(AUC), "yes", "no" ) )
+
+row.names(model_comp) <- c('Lasso', "Ridge", "Binary Log")
+
+ggplot(model_comp, aes(x= reorder(rownames(model_comp), -AUC), y = AUC, fill = ToHighlight, label = AUC)) +
+geom_col() +
+geom_text(aes(label = AUC), position=position_dodge(width=0.9), vjust=-0.25) +
+scale_fill_manual( values = c( "yes"="red", "no"="grey50" ), guide = "none")+
+xlab ("Models") +
+ylab ("AUC") +
+theme(text = element_text(size=20))
+
+
 ```
 
 
